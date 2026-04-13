@@ -740,20 +740,15 @@ fi
       _wget_proxy_env_off
       echo "[$label][INFO] Direct connection selected: Force direct connection (no proxy used)"
 
-    elif [[ "${IS_CN:-0}" -eq 0 ]]; then
-      USE_SOCKS=0
-      _wget_proxy_env_off
-      echo "[$label][INFO] Non-CN IPs: Forced direct connection (no proxy used)"
-
     else
     
       if _ensure_socks_ready; then
         USE_SOCKS=1
-        echo "[$label][INFO] Mainland IPs: SSH tunneling available; download using SOCKS5 proxy."
+        echo "[$label][INFO]  tunneling available; download using SOCKS5 proxy."
       else
         USE_SOCKS=0
         _wget_proxy_env_off
-        echo "[$label][WARN] Mainland IP: SSH tunneling unavailable; please attempt direct connection for download."
+        echo "[$label][WARN]  tunneling unavailable; please attempt direct connection for download."
       fi
     fi
 
@@ -3511,14 +3506,12 @@ is_lan
 detect_cn_ip || true
 aptinit
 
-if [[ "$IS_CN" -eq 1 ]]; then
-    enable_proxy
+enable_proxy
 
-    if [[ "${PROXY_MODE:-}" != "DIRECT" ]]; then
-      if ! proxy_healthcheck; then
-        disable_proxy
-      fi
-    fi
+if [[ "${PROXY_MODE:-}" != "DIRECT" ]]; then
+  if ! proxy_healthcheck; then
+    disable_proxy
+  fi
 fi
 
 
@@ -3634,7 +3627,7 @@ if [[ "$IS_LAN" -eq 1 ]]; then
 apt --fix-broken install -y
 apt autoremove -y
 apt update
-apt install -y libtool make gcc net-tools libc-ares-dev apache2-utils git liblzma-dev libedit-dev libncurses5-dev libnuma-dev libaio-dev libsnappy-dev libicu-dev liblz4-dev screen build-essential liburing-dev liburing2 \
+apt install -y libtool automake make gcc net-tools libc-ares-dev apache2-utils git liblzma-dev libedit-dev libncurses5-dev libnuma-dev libaio-dev libsnappy-dev libicu-dev liblz4-dev screen build-essential liburing-dev liburing2 \
   libzstd-dev wget curl m4 autoconf re2c pkg-config libxml2-dev libsodium-dev libcurl4-openssl-dev \
   libbz2-dev openssl libssl-dev libtidy-dev libxslt1-dev libsqlite3-dev zlib1g-dev \
   libpng-dev libjpeg-dev libwebp-dev libonig-dev libzip-dev libpcre2-8-0 libpcre2-dev \
@@ -3647,6 +3640,20 @@ export CURL_RETRY_DELAY=2
 
 ensure_group www
 ensure_user  www www
+
+
+cd /usr/local/src
+rm -rf liburing
+git clone https://github.com/axboe/liburing.git
+cd liburing
+git checkout liburing-2.9
+
+./configure --prefix=/usr/local
+make -j"$(nproc)"
+make install
+ldconfig
+
+
 
 
 if [ "$php_version" != "0" ]; then
