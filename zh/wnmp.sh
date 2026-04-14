@@ -5456,7 +5456,7 @@ auto_optimize_services() {
   echo "================= 优 化 完 成 ================="
 }
 
-
+_wget_proxy_env_off
 
 auto_optimize_services
 
