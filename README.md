@@ -38,7 +38,7 @@ Therefore, WNMP is recommended for use on KVM virtual machines, cloud servers, o
 
 ## Update Log
 
-v1.40 Upgrades NGINX to version 1.29.8, PHP 8.5.5，PHP 8.4.20,enables SSL tunnel selection by default, and automatically clears tunnel proxy settings upon script completion!
+v1.40 Upgrades NGINX to version 1.30.0, PHP 8.5.5，PHP 8.4.20,enables SSL tunnel selection by default, and automatically clears tunnel proxy settings upon script completion!
 
 v1.39 HTTP/3 has been reverted to an optional configuration. Under packet loss conditions, it cannot leverage the Linux kernel BBR congestion control algorithm, which may cause static resource requests to stall. If you need to enable it, please uncomment the relevant settings in the site’s Nginx configuration file.
 
