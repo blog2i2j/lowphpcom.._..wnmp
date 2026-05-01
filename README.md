@@ -38,6 +38,8 @@ Therefore, WNMP is recommended for use on KVM virtual machines, cloud servers, o
 
 ## Update Log
 
+v1.41 Fixed the issue with the WebDAV standalone launch feature
+
 v1.40 Upgrades NGINX to version 1.30.0, PHP 8.5.5，PHP 8.4.20,enables SSL tunnel selection by default, and automatically clears tunnel proxy settings upon script completion!
 
 v1.39 HTTP/3 has been reverted to an optional configuration. Under packet loss conditions, it cannot leverage the Linux kernel BBR congestion control algorithm, which may cause static resource requests to stall. If you need to enable it, please uncomment the relevant settings in the site’s Nginx configuration file.
@@ -95,7 +97,7 @@ It’s designed for **small to medium websites, edge nodes, and private deployme
 ## ✨ Core Features
 
 - **Ready-to-Use Web Runtime**  
-  Compiles latest Nginx (1.29.5) with `dav-ext`, `http2`, and `stream` modules.  
+  Compiles latest Nginx (1.30.x) with `dav-ext`, `http2`, and `stream` modules.  
   Supports PHP 8.2–8.5 and MariaDB 10.6 / 10.11 / 11.8.
 
 - **Kernel & Network Optimization**  
