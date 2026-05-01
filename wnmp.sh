@@ -3,7 +3,7 @@
 # Copyright (C) 2026 wnmp.org
 # Website: https://wnmp.org
 # License: GNU General Public License v3.0 (GPLv3)
-# Version: 1.40
+# Version: 1.41
 
 set -euo pipefail
 
@@ -64,7 +64,7 @@ green  " [init] WNMP one-click installer started"
 green  " [init] https://wnmp.org"
 green  " [init] Logs saved to: ${LOGFILE}"
 green  " [init] Start time: $(date '+%F %T')"
-green  " [init] Version: 1.40"
+green  " [init] Version: 1.41"
 green  "============================================================"
 echo
 sleep 1
@@ -75,7 +75,7 @@ Usage:
   wnmp               # Normal installation
   wnmp status        # Show service status
   wnmp sshkey        # Configure SSH key login
-  wnmp webdav        # Add a WebDAV account
+  wnmp webdav [domain]        # Add a WebDAV account
   wnmp vhost         # Create a virtual host (with SSL certificate)
   wnmp tool          # Kernel / network tuning only
   wnmp restart       # Restart services
@@ -461,7 +461,6 @@ detect_cn_ip() {
 
   return 0
 }
-
 
 git_clone_wnmp() {
   local repo="$1"
@@ -1308,12 +1307,138 @@ proxy_healthcheck() {
 
 
 
+wnmp_webdav_conf_has_ssl() {
+  local conf="$1"
+  local cert key
+
+  grep -qE '^[[:space:]]*listen[[:space:]]+([^;[:space:]]+:)?443([^;]*[[:space:]])?ssl([^;]*)?;' "$conf" || return 1
+  cert="$(awk '$1=="ssl_certificate" {gsub(/;$/, "", $2); print $2; exit}' "$conf")"
+  key="$(awk '$1=="ssl_certificate_key" {gsub(/;$/, "", $2); print $2; exit}' "$conf")"
+
+  [[ -n "$cert" && -n "$key" ]] || return 1
+  [[ -s "$cert" && -s "$key" ]] || return 1
+}
+
+wnmp_webdav_conf_has_location() {
+  local conf="$1"
+  grep -qE '^[[:space:]]*location[[:space:]]+=+[[:space:]]+/webdav[[:space:]]*\{' "$conf" &&
+    grep -qE '^[[:space:]]*location[[:space:]]+\^~[[:space:]]+/webdav/[[:space:]]*\{' "$conf"
+}
+
+wnmp_webdav_remove_location_blocks() {
+  local conf="$1"
+  local tmp_out
+  tmp_out="$(mktemp)"
+
+  awk '
+    function brace_delta(s, t) {
+      t=s
+      return gsub(/\{/, "{", t) - gsub(/\}/, "}", s)
+    }
+    BEGIN { skipping=0; depth=0 }
+    {
+      if (skipping==0 && ($0 ~ /^[[:space:]]*location[[:space:]]+=+[[:space:]]+\/webdav[[:space:]]*\{/ || $0 ~ /^[[:space:]]*location[[:space:]]+\^~[[:space:]]+\/webdav\/[[:space:]]*\{/)) {
+        skipping=1
+        depth=brace_delta($0)
+        if (depth <= 0) skipping=0
+        next
+      }
+      if (skipping==1) {
+        depth += brace_delta($0)
+        if (depth <= 0) skipping=0
+        next
+      }
+      print $0
+    }
+  ' "$conf" > "$tmp_out" && mv "$tmp_out" "$conf"
+  local rc=$?
+  rm -f "$tmp_out" 2>/dev/null || true
+  return "$rc"
+}
+
+wnmp_webdav_inject_location() {
+  local conf="$1"
+  local tmp_block tmp_out
+
+  wnmp_webdav_conf_has_location "$conf" && return 0
+
+  wnmp_webdav_remove_location_blocks "$conf" || return 1
+
+  tmp_block="$(mktemp)"
+  tmp_out="$(mktemp)"
+  cat > "$tmp_block" <<'EOF'
+
+    location = /webdav {
+        return 301 /webdav/;
+    }
+
+    location ^~ /webdav/ {
+        if ($server_port != 443) { return 403; }
+        set $domain $host;
+        if ($host ~* "^www\.(.+)$") {
+            set $domain $1;
+        }
+        set $site_root /home/wwwroot/$domain;
+        alias $site_root/;
+
+        types { }
+
+        default_type application/octet-stream;
+        auth_basic "WebDAV Authentication";
+        auth_basic_user_file /home/passwd/.$host;
+        dav_methods PUT DELETE MKCOL COPY MOVE;
+        dav_ext_methods PROPFIND OPTIONS LOCK UNLOCK;
+        create_full_put_path on;
+        dav_access user:rw group:rw all:r;
+        dav_ext_lock zone=webdav_locks;
+
+    }
+EOF
+
+  awk -v BLOCK="$tmp_block" '
+    function brace_delta(s, t) {
+      t=s
+      return gsub(/\{/, "{", t) - gsub(/\}/, "}", s)
+    }
+    function print_block() {
+      while ((getline line < BLOCK) > 0) print line
+      close(BLOCK)
+    }
+    BEGIN { in_server=0; depth=0; inserted=0 }
+    {
+      if (inserted==0 && in_server==1 && depth==1 && $0 ~ /^[[:space:]]*}[[:space:]]*$/) {
+        print_block()
+        inserted=1
+      }
+      print $0
+      if (inserted==0) {
+        if (in_server==0 && $0 ~ /^[[:space:]]*server[[:space:]]*{[[:space:]]*$/) {
+          in_server=1
+          depth=1
+        } else if (in_server==1) {
+          depth += brace_delta($0)
+          if (depth <= 0) in_server=0
+        }
+      }
+    }
+    END { exit inserted ? 0 : 1 }
+  ' "$conf" > "$tmp_out" && mv "$tmp_out" "$conf"
+  local rc=$?
+  rm -f "$tmp_block" "$tmp_out" 2>/dev/null || true
+  return "$rc"
+}
+
 webdav() {
 
   local domain="${1:-${domain:-}}"
   local user pass passwd_file ans
 
   if [[ -z "$domain" ]]; then
+    read -rp "Please enter the domain name you want to add for WebDAV:" domain || true
+  fi
+  domain="${domain,,}"
+  if [[ -z "$domain" ]]; then
+    echo "[webdav][ERROR] The domain name cannot be empty. Usage：wnmp webdav example.com"
     return 1
   fi
 
@@ -1332,7 +1457,12 @@ webdav() {
     conf_path="$VHOST_DIR/${domain_lc#www.}.conf"
   fi
   if [[ ! -f "$conf_path" ]]; then
-    echo "[webdav][ERROR] Configuration not found:$VHOST_DIR/${domain_lc}.conf OR ${domain_lc#www.}.conf"
+    echo "[webdav][ERROR] Configuration not found:$VHOST_DIR/${domain_lc}.conf 或 ${domain_lc#www.}.conf"
+    return 1
+  fi
+
+  if ! wnmp_webdav_conf_has_ssl "$conf_path"; then
+    echo "[webdav][ERROR] This site does not have an SSL certificate configured, so WebDAV cannot be enabled. Please configure an SSL certificate for ${domain_lc} first."
     return 1
   fi
 
@@ -1350,6 +1480,16 @@ webdav() {
 
   backup="${conf_path}.bak-$(date +%Y%m%d-%H%M%S)"
   cp -a "$conf_path" "$backup" || { echo "[webdav][ERROR] Backup failed:$backup"; return 1; }
+  if wnmp_webdav_conf_has_location "$conf_path"; then
+    echo "[webdav] A WebDAV location already exists in the configuration; skip the injection."
+  else
+    wnmp_webdav_inject_location "$conf_path" || {
+      echo "[webdav][ERROR] Failed to inject WebDAV configuration; rolling back to:$backup"
+      cp -a "$backup" "$conf_path" >/dev/null 2>&1 || true
+      return 1
+    }
+    echo "[webdav] The WebDAV location configuration has been added."
+  fi
 
   if "$NGINX_BIN" -t; then
     if systemctl >/dev/null 2>&1; then
@@ -1938,6 +2078,7 @@ EOF
 # END AUTO-HTTPS-REDIRECT
 EOF
 )"
+
   REDIR_PLAIN_SSL="$(cat <<'EOF'
 # BEGIN AUTO-HTTPS-REDIRECT
     if ($server_port = 80 ) {
@@ -3489,7 +3630,7 @@ for arg in "$@"; do
      -h|--help|help) usage; exit 0 ;;
      restart) restart; exit 0 ;;
      status) status; exit 0 ;;
-     webdav) webdav; exit 0 ;;
+     webdav) shift; webdav "${1:-}"; exit 0 ;;
      sshkey) sshkey; exit 0 ;;
      remove) remove; exit 0 ;;
      renginx) renginx; exit 0 ;;
@@ -3646,7 +3787,6 @@ export CURL_RETRY_DELAY=2
 ensure_group www
 ensure_user  www www
 
-
 cd /usr/local/src
 rm -rf liburing
 git clone https://github.com/axboe/liburing.git
@@ -3657,9 +3797,6 @@ git checkout liburing-2.9
 make -j"$(nproc)"
 make install
 ldconfig
-
-
-
 
 if [ "$php_version" != "0" ]; then
   cd "$WNMPDIR"
@@ -3981,7 +4118,6 @@ fi
   /usr/local/php/bin/pie install phpredis/phpredis
   /usr/local/php/bin/pie install arnaud-lb/inotify
   /usr/local/php/bin/pie install apcu/apcu
-  
 
 else
   echo 'Do not install PHP'
@@ -5294,7 +5430,6 @@ PrivateTmp=false
 WantedBy=multi-user.target
 EOF
 
-
 /usr/local/mariadb/scripts/mariadb-install-db --defaults-file=/etc/my.cnf --basedir=/usr/local/mariadb --datadir=/home/mariadb --user=mariadb
 
   systemctl daemon-reload
@@ -5364,8 +5499,7 @@ SQL
     exit 1
   fi
 
-  echo -e "\n✅ MariaDB initialization complete. Root password:\033[1;32m${MYSQL_PASS}\033[0m"
-
+  echo -e "\n✅ MariaDB 初始化完成，root 密码：\033[1;32m${MYSQL_PASS}\033[0m"
 
 
   cd "$WNMPDIR"
